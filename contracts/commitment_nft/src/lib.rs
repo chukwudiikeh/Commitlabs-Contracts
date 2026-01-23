@@ -450,8 +450,7 @@ impl CommitmentNFTContract {
         // 5. Check if commitment has expired (optional - may be handled by core contract)
         // The issue states this is optional since core contract may handle it
         // Uncomment if NFT contract should also verify expiration:
-        // let now = e.ledger().timestamp();
-        // if now < nft.metadata.expires_at {
+        // if e.ledger().timestamp() < nft.metadata.expires_at {
         //     return Err(Error::NotExpired);
         // }
 
