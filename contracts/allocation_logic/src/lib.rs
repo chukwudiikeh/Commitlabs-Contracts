@@ -1,5 +1,4 @@
 // Allocation Strategies Contract 
-// Security Hardened - Industry Standard
 #![no_std]
 
 use soroban_sdk::{
