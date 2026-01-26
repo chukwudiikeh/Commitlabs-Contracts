@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, log, token, symbol_short, Address, Env, IntoVal, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, log, symbol_short, token, Address, Env,
+    IntoVal, String, Symbol, Vec,
 };
 
 #[contracterror]
@@ -117,9 +117,10 @@ fn read_commitment(e: &Env, commitment_id: &String) -> Option<Commitment> {
 }
 
 fn set_commitment(e: &Env, commitment: &Commitment) {
-    e.storage()
-        .instance()
-        .set(&DataKey::Commitment(commitment.commitment_id.clone()), commitment);
+    e.storage().instance().set(
+        &DataKey::Commitment(commitment.commitment_id.clone()),
+        commitment,
+    );
 }
 
 fn has_commitment(e: &Env, commitment_id: &String) -> bool {
@@ -282,7 +283,11 @@ impl CommitmentCoreContract {
 
         // Emit creation event
         e.events().publish(
-            (symbol_short!("Created"), commitment_id.clone(), owner.clone()),
+            (
+                symbol_short!("Created"),
+                commitment_id.clone(),
+                owner.clone(),
+            ),
             (amount, rules, nft_token_id, e.ledger().timestamp()),
         );
         commitment_id
@@ -290,8 +295,7 @@ impl CommitmentCoreContract {
 
     /// Get commitment details
     pub fn get_commitment(e: Env, commitment_id: String) -> Commitment {
-        read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"))
+        read_commitment(&e, &commitment_id).unwrap_or_else(|| panic!("Commitment not found"))
     }
 
     /// Get all commitments for an owner
@@ -331,7 +335,7 @@ impl CommitmentCoreContract {
         // TODO: Verify caller is authorized (allocation contract)
         // TODO: Update current_value
         // TODO: Check if max_loss_percent is violated
-        
+
         // Emit value update event
         e.events().publish(
             (symbol_short!("ValUpd"), commitment_id),
@@ -342,8 +346,8 @@ impl CommitmentCoreContract {
     /// Check if commitment rules are violated
     /// Returns true if any rule violation is detected (loss limit or duration)
     pub fn check_violations(e: Env, commitment_id: String) -> bool {
-        let commitment = read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"));
+        let commitment =
+            read_commitment(&e, &commitment_id).unwrap_or_else(|| panic!("Commitment not found"));
 
         // Skip check if already settled or violated
         let active_status = String::from_str(&e, "active");
@@ -387,12 +391,9 @@ impl CommitmentCoreContract {
 
     /// Get detailed violation information
     /// Returns a tuple: (has_violations, loss_violated, duration_violated, loss_percent, time_remaining)
-    pub fn get_violation_details(
-        e: Env,
-        commitment_id: String,
-    ) -> (bool, bool, bool, i128, u64) {
-        let commitment = read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"));
+    pub fn get_violation_details(e: Env, commitment_id: String) -> (bool, bool, bool, i128, u64) {
+        let commitment =
+            read_commitment(&e, &commitment_id).unwrap_or_else(|| panic!("Commitment not found"));
 
         let current_time = e.ledger().timestamp();
 
@@ -420,7 +421,13 @@ impl CommitmentCoreContract {
 
         let has_violations = loss_violated || duration_violated;
 
-        (has_violations, loss_violated, duration_violated, loss_percent, time_remaining)
+        (
+            has_violations,
+            loss_violated,
+            duration_violated,
+            loss_percent,
+            time_remaining,
+        )
     }
 
     /// Settle commitment at maturity
@@ -431,7 +438,7 @@ impl CommitmentCoreContract {
         // TODO: Transfer assets back to owner
         // TODO: Mark commitment as settled
         // TODO: Call NFT contract to mark NFT as settled
-        
+
         // Emit settlement event
         e.events().publish(
             (symbol_short!("Settled"), commitment_id),
@@ -447,7 +454,7 @@ impl CommitmentCoreContract {
         let returned_amount: i128 = 0;
         // TODO: Transfer remaining amount (after penalty) to owner
         // TODO: Mark commitment as early_exit
-        
+
         // Emit early exit event
         e.events().publish(
             (symbol_short!("EarlyExt"), commitment_id, caller),
@@ -461,7 +468,7 @@ impl CommitmentCoreContract {
         // TODO: Verify commitment is active
         // TODO: Transfer assets to target pool
         // TODO: Record allocation
-        
+
         // Emit allocation event
         e.events().publish(
             (symbol_short!("Alloc"), commitment_id, target_pool),

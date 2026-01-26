@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Symbol, Address, Env, String, Vec, Map,
-    IntoVal, TryIntoVal, Val,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, Map, String, Symbol,
+    TryIntoVal, Val, Vec,
 };
 
 #[contracttype]
@@ -86,8 +86,9 @@ impl AttestationEngineContract {
             .set(&DataKey::CommitmentCore, &commitment_core);
         // Store admin and commitment core contract address in instance storage
         e.storage().instance().set(&symbol_short!("ADMIN"), &admin);
-        e.storage().instance().set(&symbol_short!("CORE"), &commitment_core);
-
+        e.storage()
+            .instance()
+            .set(&symbol_short!("CORE"), &commitment_core);
     }
 
     // ========================================================================
@@ -97,39 +98,40 @@ impl AttestationEngineContract {
     /// Add an authorized recorder (only admin can call)
     pub fn add_authorized_recorder(e: Env, caller: Address, recorder: Address) {
         caller.require_auth();
-        
+
         // Verify caller is admin
-        let admin: Address = e.storage()
+        let admin: Address = e
+            .storage()
             .instance()
             .get(&symbol_short!("ADMIN"))
             .unwrap_or_else(|| panic!("Contract not initialized"));
-        
+
         if caller != admin {
             panic!("Unauthorized: only admin can add recorders");
         }
-        
+
         // Add recorder to authorized list
         let key = (symbol_short!("AUTHREC"), recorder.clone());
         e.storage().instance().set(&key, &true);
-        
+
         // Emit event
-        e.events().publish(
-            (Symbol::new(&e, "RecorderAdded"),),
-            (recorder,)
-        );
+        e.events()
+            .publish((Symbol::new(&e, "RecorderAdded"),), (recorder,));
     }
 
     /// Check if an address is authorized to record events
     fn is_authorized_recorder(e: &Env, recorder: &Address) -> bool {
         // Admin is always authorized
-        if let Some(admin) = e.storage()
+        if let Some(admin) = e
+            .storage()
             .instance()
-            .get::<Symbol, Address>(&symbol_short!("ADMIN")) {
+            .get::<Symbol, Address>(&symbol_short!("ADMIN"))
+        {
             if *recorder == admin {
                 return true;
             }
         }
-        
+
         // Check if recorder is in authorized list
         let key = (symbol_short!("AUTHREC"), recorder.clone());
         e.storage().instance().get(&key).unwrap_or(false)
@@ -142,7 +144,7 @@ impl AttestationEngineContract {
     /// Load health metrics from storage or create new ones
     fn load_or_create_health_metrics(e: &Env, commitment_id: &String) -> HealthMetrics {
         let key = (symbol_short!("HEALTH"), commitment_id.clone());
-        
+
         if let Some(metrics) = e.storage().persistent().get(&key) {
             metrics
         } else {
@@ -180,61 +182,67 @@ impl AttestationEngineContract {
 
         let is_compliant = Self::verify_compliance(e.clone(), commitment_id.clone());
 
+        // Clone values before moving them
+        let commitment_id_clone = commitment_id.clone();
+        let attestation_type_clone = attestation_type.clone();
+        let data_clone = data.clone();
+        let verified_by_clone = verified_by.clone();
+
         let att = Attestation {
-            commitment_id: commitment_id.clone(),
+            commitment_id: commitment_id_clone.clone(),
             timestamp: ts,
-            attestation_type,
-            data,
+            attestation_type: attestation_type_clone.clone(),
+            data: data_clone.clone(),
             is_compliant,
-            verified_by,
+            verified_by: verified_by_clone.clone(),
         };
 
         let mut list: Vec<Attestation> = e
             .storage()
             .persistent()
-            .get(&DataKey::Attestations(commitment_id.clone()))
+            .get(&DataKey::Attestations(commitment_id_clone.clone()))
             .unwrap_or(Vec::new(&e));
         list.push_back(att);
         e.storage()
             .persistent()
-            .set(&DataKey::Attestations(commitment_id.clone()), &list);
+            .set(&DataKey::Attestations(commitment_id_clone.clone()), &list);
 
         // Update health state "last seen".
-        let mut state = Self::get_health_state_or_default(&e, commitment_id.clone());
+        let mut state = Self::get_health_state_or_default(&e, &commitment_id_clone);
         state.last_attestation = ts;
         e.storage()
             .persistent()
-            .set(&DataKey::HealthState(commitment_id), &state);
+            .set(&DataKey::HealthState(commitment_id_clone.clone()), &state);
 
         // Create attestation record
         let attestation = Attestation {
-            commitment_id: commitment_id.clone(),
-            attestation_type: attestation_type.clone(),
-            data,
+            commitment_id: commitment_id_clone,
+            attestation_type: attestation_type_clone,
+            data: data_clone,
             timestamp: e.ledger().timestamp(),
-            verified_by: verified_by.clone(),
+            verified_by: verified_by_clone,
             is_compliant: true, // Default to true, can be updated by logic
         };
-        
+
         // Retrieve existing attestations
         let key = (symbol_short!("ATTS"), commitment_id.clone());
-        let mut attestations: Vec<Attestation> = e.storage()
+        let mut attestations: Vec<Attestation> = e
+            .storage()
             .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&e));
-            
+
         // Add new attestation
         attestations.push_back(attestation);
-        
+
         // Store updated list
         e.storage().persistent().set(&key, &attestations);
-        
+
         // Emit attestation event
         e.events().publish(
             (symbol_short!("Attest"), commitment_id, verified_by),
-            (attestation_type, true, e.ledger().timestamp())
+            (attestation_type, true, e.ledger().timestamp()),
         );
-r
     }
 
     /// Get all attestations for a commitment
@@ -245,7 +253,6 @@ r
             .persistent()
             .get(&key)
             .unwrap_or_else(|| Vec::new(&e))
-
     }
 
     /// Get current health metrics for a commitment
@@ -257,45 +264,40 @@ r
         let current_value = commitment.current_value;
         let drawdown_percent = Self::calc_drawdown_percent(initial_value, current_value);
 
-        let state = Self::get_health_state_or_default(&e, commitment_id.clone());
-
+        let state = Self::get_health_state_or_default(&e, &commitment_id);
 
         // Get commitment from core contract
-        let commitment_core: Address = e.storage()
-            .instance()
-            .get(&symbol_short!("CORE"))
-            .unwrap();
-        
+        let commitment_core: Address = e.storage().instance().get(&symbol_short!("CORE")).unwrap();
+
         // Call get_commitment on commitment_core contract
         // Using Symbol::new() for function name longer than 9 characters
         let mut args = Vec::new(&e);
         args.push_back(commitment_id.clone().into_val(&e));
-        let commitment_val: Val = e.invoke_contract(
-            &commitment_core,
-            &Symbol::new(&e, "get_commitment"),
-            args,
-        );
-        
+        let commitment_val: Val =
+            e.invoke_contract(&commitment_core, &Symbol::new(&e, "get_commitment"), args);
+
         // Convert Val to Commitment
         let commitment: Commitment = commitment_val.try_into_val(&e).unwrap();
-        
+
         // Get all attestations
         let attestations = Self::get_attestations(e.clone(), commitment_id.clone());
-        
+
         // Extract values from commitment
         let initial_value = commitment.amount; // Using amount as initial value
         let current_value = commitment.current_value;
-        
+
         // Calculate drawdown percentage: ((initial - current) / initial) * 100
         // Handle zero initial value to prevent division by zero
         let drawdown_percent = if initial_value > 0 {
             let diff = initial_value.checked_sub(current_value).unwrap_or(0);
-            diff.checked_mul(100).unwrap_or(0)
-                .checked_div(initial_value).unwrap_or(0)
+            diff.checked_mul(100)
+                .unwrap_or(0)
+                .checked_div(initial_value)
+                .unwrap_or(0)
         } else {
             0
         };
-        
+
         // Sum fees from fee attestations
         // Extract fee_amount from data map where key is "fee_amount"
         let fees_generated: i128 = 0;
@@ -313,11 +315,11 @@ r
                 }
             }
         }
-        
+
         // For now, fees_generated will be 0 until we implement proper fee tracking
         // This is acceptable as the requirement is to sum from fee attestations
         // which requires the attest() function to properly store fees
-        
+
         // Calculate volatility exposure from attestations
         // Simplified: use variance of price changes from attestations
         let mut volatility_exposure: i128 = 0;
@@ -326,16 +328,16 @@ r
             // For now, return 0 as placeholder - would need price history
             volatility_exposure = 0;
         }
-        
+
         // Get last attestation timestamp
-        let last_attestation = attestations.iter()
+        let last_attestation = attestations
+            .iter()
             .map(|att| att.timestamp)
             .max()
             .unwrap_or(0);
-        
+
         // Calculate compliance score
         let compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
-        
 
         HealthMetrics {
             commitment_id,
@@ -346,12 +348,6 @@ r
             volatility_exposure: state.volatility_exposure,
             last_attestation: state.last_attestation,
             compliance_score: state.compliance_score,
-
-            fees_generated,
-            volatility_exposure,
-            last_attestation,
-            compliance_score,
-
         }
     }
 
@@ -392,7 +388,7 @@ r
     }
 
     /// Record fee generation
-    /// 
+    ///
     /// # Arguments
     /// * `caller` - The address calling this function (must be authorized)
     /// * `commitment_id` - The commitment ID to record fees for
@@ -403,14 +399,21 @@ r
         if !Self::is_authorized_recorder(&e, &caller) {
             panic!("Unauthorized: caller is not an authorized recorder");
         }
-        
+
         // 2. Load or create health metrics
         let mut metrics = Self::load_or_create_health_metrics(&e, &commitment_id);
-        
+
         // 3. Update fees_generated
-        metrics.fees_generated = metrics.fees_generated.checked_add(fee_amount)
-            .unwrap_or_else(|| panic!("Fee amount overflow: cannot add {} to existing {}", fee_amount, metrics.fees_generated));
-        
+        metrics.fees_generated = metrics
+            .fees_generated
+            .checked_add(fee_amount)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Fee amount overflow: cannot add {} to existing {}",
+                    fee_amount, metrics.fees_generated
+                )
+            });
+
         // 4. Create fee attestation
         let data = Map::new(&e);
         let attestation = Attestation {
@@ -421,34 +424,36 @@ r
             verified_by: caller.clone(),
             is_compliant: true,
         };
-        
+
         // Store attestation
         let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-        let mut attestations: Vec<Attestation> = e.storage()
+        let mut attestations: Vec<Attestation> = e
+            .storage()
             .persistent()
             .get(&atts_key)
             .unwrap_or_else(|| Vec::new(&e));
         attestations.push_back(attestation);
         e.storage().persistent().set(&atts_key, &attestations);
-        
+
         // 5. Recalculate compliance score
-        metrics.compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
-        
+        metrics.compliance_score =
+            Self::calculate_compliance_score(e.clone(), commitment_id.clone());
+
         // 6. Update last attestation timestamp
         metrics.last_attestation = e.ledger().timestamp();
-        
+
         // 7. Store updated health metrics
         Self::store_health_metrics(&e, &metrics);
-        
+
         // 8. Emit FeeRecorded event
         e.events().publish(
             (symbol_short!("FeeRec"), commitment_id),
-            (fee_amount, e.ledger().timestamp())
+            (fee_amount, e.ledger().timestamp()),
         );
     }
 
     /// Record drawdown event
-    /// 
+    ///
     /// # Arguments
     /// * `caller` - The address calling this function (must be authorized)
     /// * `commitment_id` - The commitment ID to record drawdown for
@@ -459,45 +464,46 @@ r
         if !Self::is_authorized_recorder(&e, &caller) {
             panic!("Unauthorized: caller is not an authorized recorder");
         }
-        
+
         // 2. Get commitment from core contract to retrieve initial amount and max_loss_percent
-        let commitment_core: Address = e.storage()
+        let commitment_core: Address = e
+            .storage()
             .instance()
             .get(&symbol_short!("CORE"))
             .unwrap_or_else(|| panic!("Core contract not set"));
-        
+
         let mut args = Vec::new(&e);
         args.push_back(commitment_id.clone().into_val(&e));
-        let commitment_val: Val = e.invoke_contract(
-            &commitment_core,
-            &Symbol::new(&e, "get_commitment"),
-            args,
-        );
-        let commitment: Commitment = commitment_val.try_into_val(&e)
+        let commitment_val: Val =
+            e.invoke_contract(&commitment_core, &Symbol::new(&e, "get_commitment"), args);
+        let commitment: Commitment = commitment_val
+            .try_into_val(&e)
             .unwrap_or_else(|_| panic!("Failed to get commitment"));
-        
+
         // 3. Calculate drawdown percentage: ((initial - current) / initial) * 100
         let initial_value = commitment.amount;
         let drawdown_percent = if initial_value > 0 {
             let diff = initial_value.checked_sub(current_value).unwrap_or(0);
-            diff.checked_mul(100).unwrap_or(0)
-                .checked_div(initial_value).unwrap_or(0)
+            diff.checked_mul(100)
+                .unwrap_or(0)
+                .checked_div(initial_value)
+                .unwrap_or(0)
         } else {
             0
         };
-        
+
         // 4. Load or create health metrics
         let mut metrics = Self::load_or_create_health_metrics(&e, &commitment_id);
-        
+
         // 5. Update health metrics
         metrics.current_value = current_value;
         metrics.initial_value = initial_value;
         metrics.drawdown_percent = drawdown_percent;
-        
+
         // 6. Check for violation
         let max_loss_percent = commitment.rules.max_loss_percent as i128;
         let is_violation = drawdown_percent > max_loss_percent;
-        
+
         if is_violation {
             // Create violation attestation
             let violation_data = Map::new(&e);
@@ -509,23 +515,24 @@ r
                 verified_by: caller.clone(),
                 is_compliant: false,
             };
-            
+
             // Store violation attestation
             let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-            let mut attestations: Vec<Attestation> = e.storage()
+            let mut attestations: Vec<Attestation> = e
+                .storage()
                 .persistent()
                 .get(&atts_key)
                 .unwrap_or_else(|| Vec::new(&e));
             attestations.push_back(violation_attestation);
             e.storage().persistent().set(&atts_key, &attestations);
-            
+
             // Emit ViolationDetected event
             e.events().publish(
                 (Symbol::new(&e, "ViolationDetected"), commitment_id.clone()),
-                (drawdown_percent, max_loss_percent, e.ledger().timestamp())
+                (drawdown_percent, max_loss_percent, e.ledger().timestamp()),
             );
         }
-        
+
         // 7. Create drawdown attestation
         let drawdown_data = Map::new(&e);
         let drawdown_attestation = Attestation {
@@ -536,90 +543,93 @@ r
             verified_by: caller.clone(),
             is_compliant: !is_violation,
         };
-        
+
         // Store drawdown attestation
         let atts_key = (symbol_short!("ATTS"), commitment_id.clone());
-        let mut attestations: Vec<Attestation> = e.storage()
+        let mut attestations: Vec<Attestation> = e
+            .storage()
             .persistent()
             .get(&atts_key)
             .unwrap_or_else(|| Vec::new(&e));
         attestations.push_back(drawdown_attestation);
         e.storage().persistent().set(&atts_key, &attestations);
-        
+
         // 8. Recalculate compliance score
-        metrics.compliance_score = Self::calculate_compliance_score(e.clone(), commitment_id.clone());
-        
+        metrics.compliance_score =
+            Self::calculate_compliance_score(e.clone(), commitment_id.clone());
+
         // 9. Update last attestation timestamp
         metrics.last_attestation = e.ledger().timestamp();
-        
+
         // 10. Store updated health metrics
         Self::store_health_metrics(&e, &metrics);
-        
+
         // 11. Emit DrawdownRecorded event
         e.events().publish(
             (symbol_short!("Drawdown"), commitment_id),
-            (current_value, drawdown_percent, e.ledger().timestamp())
+            (current_value, drawdown_percent, e.ledger().timestamp()),
         );
     }
 
     /// Calculate compliance score (0-100)
     pub fn calculate_compliance_score(e: Env, commitment_id: String) -> u32 {
         // Get commitment from core contract
-        let commitment_core: Address = e.storage()
-            .instance()
-            .get(&symbol_short!("CORE"))
-            .unwrap();
-        
+        let commitment_core: Address = e.storage().instance().get(&symbol_short!("CORE")).unwrap();
+
         // Call get_commitment on commitment_core contract
         // Using Symbol::new() for function name longer than 9 characters
         let mut args = Vec::new(&e);
         args.push_back(commitment_id.clone().into_val(&e));
-        let commitment_val: Val = e.invoke_contract(
-            &commitment_core,
-            &Symbol::new(&e, "get_commitment"),
-            args,
-        );
-        
+        let commitment_val: Val =
+            e.invoke_contract(&commitment_core, &Symbol::new(&e, "get_commitment"), args);
+
         // Convert Val to Commitment
         let commitment: Commitment = commitment_val.try_into_val(&e).unwrap();
-        
+
         // Get all attestations
         let attestations = Self::get_attestations(e.clone(), commitment_id.clone());
-        
+
         // Base score: 100
         let mut score: i32 = 100;
-        
+
         // Count violations: -20 per violation
-        let violation_count = attestations.iter()
-            .filter(|att| !att.is_compliant || att.attestation_type == String::from_str(&e, "violation"))
+        let violation_count = attestations
+            .iter()
+            .filter(|att| {
+                !att.is_compliant || att.attestation_type == String::from_str(&e, "violation")
+            })
             .count() as i32;
-        score = score.checked_sub(violation_count.checked_mul(20).unwrap_or(0)).unwrap_or(0);
-        
+        score = score
+            .checked_sub(violation_count.checked_mul(20).unwrap_or(0))
+            .unwrap_or(0);
+
         // Calculate drawdown vs threshold: -1 per % over threshold
         let initial_value = commitment.amount;
         let current_value = commitment.current_value;
         let max_loss_percent = commitment.rules.max_loss_percent as i128;
-        
+
         if initial_value > 0 {
             let drawdown_percent = {
                 let diff = initial_value.checked_sub(current_value).unwrap_or(0);
-                diff.checked_mul(100).unwrap_or(0)
-                    .checked_div(initial_value).unwrap_or(0)
+                diff.checked_mul(100)
+                    .unwrap_or(0)
+                    .checked_div(initial_value)
+                    .unwrap_or(0)
             };
-            
+
             if drawdown_percent > max_loss_percent {
                 let over_threshold = drawdown_percent.checked_sub(max_loss_percent).unwrap_or(0);
                 score = score.checked_sub(over_threshold as i32).unwrap_or(0);
             }
         }
-        
+
         // Calculate fee generation vs expectations: +1 per % of expected fees
         let min_fee_threshold = commitment.rules.min_fee_threshold;
         // Get fees from health metrics (which sums from attestations)
         // We'll calculate this from the attestations directly
         let total_fees: i128 = 0;
         let fee_key = String::from_str(&e, "fee_amount");
-        
+
         for att in attestations.iter() {
             if att.attestation_type == String::from_str(&e, "fee_generation") {
                 // Extract fee from data map
@@ -634,31 +644,36 @@ r
                 }
             }
         }
-        
+
         // Only add fee bonus if we have fees and a threshold
         if min_fee_threshold > 0 && total_fees > 0 {
-            let fee_percent = total_fees.checked_mul(100).unwrap_or(0)
-                .checked_div(min_fee_threshold).unwrap_or(0);
+            let fee_percent = total_fees
+                .checked_mul(100)
+                .unwrap_or(0)
+                .checked_div(min_fee_threshold)
+                .unwrap_or(0);
             // Cap the bonus to prevent excessive score inflation
             let bonus = if fee_percent > 100 { 100 } else { fee_percent };
             score = score.checked_add(bonus as i32).unwrap_or(100);
         }
-        
+
         // Duration adherence: +10 if on track
         let current_time = e.ledger().timestamp();
         let expires_at = commitment.expires_at;
         let created_at = commitment.created_at;
-        
+
         if expires_at > created_at {
             let total_duration = expires_at.checked_sub(created_at).unwrap_or(1);
             let elapsed = current_time.checked_sub(created_at).unwrap_or(0);
-            
+
             // Check if we're on track (not too far behind or ahead)
             // Simplified: if elapsed is within reasonable bounds of expected progress
             let expected_progress = (elapsed as u128)
-                .checked_mul(100).unwrap_or(0)
-                .checked_div(total_duration as u128).unwrap_or(0);
-            
+                .checked_mul(100)
+                .unwrap_or(0)
+                .checked_div(total_duration as u128)
+                .unwrap_or(0);
+
             // Consider "on track" if between 0-100% of expected time
             if expected_progress <= 100 {
                 score = score.checked_add(10).unwrap_or(100);
@@ -668,14 +683,81 @@ r
         if loss <= 0 {
             return 0;
         }
-        
+
         // Emit compliance score update event
         e.events().publish(
             (symbol_short!("ScoreUpd"), commitment_id),
             (score as u32, e.ledger().timestamp()),
         );
-        
+
         score as u32
+    }
+
+    // ========================================================================
+    // Helper Functions
+    // ========================================================================
+
+    /// Get health state or create default
+    fn get_health_state_or_default(e: &Env, commitment_id: &String) -> HealthState {
+        e.storage()
+            .persistent()
+            .get(&DataKey::HealthState(commitment_id.clone()))
+            .unwrap_or(HealthState {
+                fees_generated: 0,
+                volatility_exposure: 0,
+                last_attestation: 0,
+                compliance_score: 0,
+            })
+    }
+
+    /// Get commitment core contract address
+    fn get_commitment_core(e: &Env) -> Address {
+        e.storage()
+            .instance()
+            .get(&symbol_short!("CORE"))
+            .unwrap_or_else(|| panic!("Core contract not set"))
+    }
+
+    /// Get commitment from core contract
+    fn core_get_commitment(
+        e: &Env,
+        core: &Address,
+        commitment_id: &String,
+    ) -> Commitment {
+        let mut args = Vec::new(e);
+        args.push_back(commitment_id.clone().into_val(e));
+        let commitment_val: Val = e.invoke_contract(
+            core,
+            &Symbol::new(e, "get_commitment"),
+            args,
+        );
+        commitment_val
+            .try_into_val(e)
+            .unwrap_or_else(|_| panic!("Failed to get commitment"))
+    }
+
+    /// Calculate drawdown percentage
+    fn calc_drawdown_percent(initial_value: i128, current_value: i128) -> i128 {
+        if initial_value > 0 {
+            let diff = initial_value.checked_sub(current_value).unwrap_or(0);
+            diff.checked_mul(100)
+                .unwrap_or(0)
+                .checked_div(initial_value)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Check violations via core contract
+    fn core_check_violations(e: &Env, core: &Address, commitment_id: &String) -> bool {
+        let mut args = Vec::<Val>::new(e);
+        args.push_back(commitment_id.clone().into_val(e));
+        e.invoke_contract::<bool>(
+            core,
+            &Symbol::new(e, "check_violations"),
+            args,
+        )
     }
 }
 
