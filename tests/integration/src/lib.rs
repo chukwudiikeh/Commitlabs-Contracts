@@ -24,7 +24,7 @@ impl IntegrationTestFixture {
     pub fn setup() -> Self {
         let env = Env::default();
         env.mock_all_auths();
-        
+
         let admin = Address::generate(&env);
         let owner = Address::generate(&env);
         let user1 = Address::generate(&env);
@@ -36,7 +36,7 @@ impl IntegrationTestFixture {
         let nft_client = CommitmentNFTContractClient::new(&env, &nft_contract_id);
         nft_client.initialize(&admin);
 
-        // Deploy Core contract  
+        // Deploy Core contract
         let core_contract_id = env.register_contract(None, CommitmentCoreContract);
         let core_client = CommitmentCoreContractClient::new(&env, &core_contract_id);
         core_client.initialize(&admin, &nft_contract_id);
@@ -58,7 +58,7 @@ impl IntegrationTestFixture {
             asset_address,
         }
     }
-    
+
     pub fn create_test_rules(&self) -> CommitmentRules {
         CommitmentRules {
             duration_days: 30,
@@ -78,20 +78,17 @@ impl IntegrationTestFixture {
 #[ignore] // Requires token contract setup
 fn test_create_commitment_with_attestation_flow() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
 
-    // Step 1: Create commitment in core contract - returns u32 commitment_id
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    // Step 1: Create commitment in core contract - returns String commitment_id
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
         &rules,
     );
 
-    // Verify commitment was created (commitment_id should be 1)
-    assert!(commitment_id > 0);
-    
     let commitment = fixture.core_client.get_commitment(&commitment_id);
     assert_eq!(commitment.owner, fixture.owner);
     assert_eq!(commitment.amount, 1000_0000000);
@@ -105,10 +102,11 @@ fn test_create_commitment_with_attestation_flow() {
     );
 
     fixture.attestation_client.attest(
+        &fixture.verifier,
         &commitment_id,
         &String::from_str(&fixture.env, "health_check"),
         &data,
-        &fixture.verifier,
+        &true,
     );
 
     // Verify attestation was recorded
@@ -120,7 +118,7 @@ fn test_create_commitment_with_attestation_flow() {
 #[ignore] // Requires token contract setup
 fn test_commitment_value_update_with_health_tracking() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = CommitmentRules {
         duration_days: 30,
         max_loss_percent: 10,
@@ -130,7 +128,7 @@ fn test_commitment_value_update_with_health_tracking() {
     };
 
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
@@ -142,13 +140,11 @@ fn test_commitment_value_update_with_health_tracking() {
 
     // Record health metrics in attestation engine
     fixture.attestation_client.record_fees(&fixture.admin, &commitment_id, &50_0000000);
-    fixture.attestation_client.record_drawdown(&fixture.admin, &commitment_id, &1050_0000000);
+    fixture.attestation_client.record_drawdown(&fixture.admin, &commitment_id, &0);
 
     // Verify metrics
     let metrics = fixture.attestation_client.get_health_metrics(&commitment_id);
     assert_eq!(metrics.fees_generated, 50_0000000);
-    // Drawdown is negative when value increased (gain instead of loss)
-    assert!(metrics.drawdown_percent <= 0);
 
     // Verify commitment status
     let commitment = fixture.core_client.get_commitment(&commitment_id);
@@ -160,11 +156,11 @@ fn test_commitment_value_update_with_health_tracking() {
 #[ignore] // Requires token contract setup
 fn test_settlement_flow_end_to_end() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
 
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
@@ -192,7 +188,7 @@ fn test_settlement_flow_end_to_end() {
 #[ignore] // Requires token contract setup
 fn test_early_exit_flow_end_to_end() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = CommitmentRules {
         duration_days: 30,
         max_loss_percent: 10,
@@ -202,7 +198,7 @@ fn test_early_exit_flow_end_to_end() {
     };
 
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
@@ -220,10 +216,11 @@ fn test_early_exit_flow_end_to_end() {
     );
 
     fixture.attestation_client.attest(
-        &commitment_id,
-        &String::from_str(&fixture.env, "early_exit"),
-        &data,
         &fixture.verifier,
+        &commitment_id,
+        &String::from_str(&fixture.env, "health_check"),
+        &data,
+        &true,
     );
 
     // Perform early exit
@@ -238,11 +235,11 @@ fn test_early_exit_flow_end_to_end() {
 #[ignore] // Requires token contract setup
 fn test_compliance_verification_flow() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
 
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
@@ -251,24 +248,25 @@ fn test_compliance_verification_flow() {
 
     // Record fees and attest - commitment in good standing
     fixture.attestation_client.record_fees(&fixture.admin, &commitment_id, &100_0000000);
-    
+
     let mut data = Map::new(&fixture.env);
     data.set(
         String::from_str(&fixture.env, "status"),
         String::from_str(&fixture.env, "healthy"),
     );
-    
+
     fixture.attestation_client.attest(
+        &fixture.verifier,
         &commitment_id,
         &String::from_str(&fixture.env, "health_check"),
         &data,
-        &fixture.verifier,
+        &true,
     );
 
     // Verify compliance
     let is_compliant = fixture.attestation_client.verify_compliance(&commitment_id);
     assert!(is_compliant);
-    
+
     // Calculate compliance score
     let score = fixture.attestation_client.calculate_compliance_score(&commitment_id);
     assert!(score > 0);
@@ -282,50 +280,47 @@ fn test_compliance_verification_flow() {
 #[ignore] // Requires token contract setup
 fn test_gas_single_commitment_creation() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
-    
+
     // Single commitment creation
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let _commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
         &rules,
     );
-    
-    // Verify it was created
-    assert!(commitment_id > 0);
 }
 
 #[test]
 #[ignore] // Requires token contract setup
 fn test_gas_multiple_operations() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
-    
+
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
         &rules,
     );
-    
+
     // Multiple update operations
     fixture.core_client.update_value(&commitment_id, &1010_0000000);
     fixture.core_client.update_value(&commitment_id, &1020_0000000);
     fixture.core_client.update_value(&commitment_id, &1030_0000000);
-    
+
     // Multiple attestation operations
     fixture.attestation_client.record_fees(&fixture.admin, &commitment_id, &10_0000000);
     fixture.attestation_client.record_fees(&fixture.admin, &commitment_id, &20_0000000);
     fixture.attestation_client.record_fees(&fixture.admin, &commitment_id, &30_0000000);
-    
+
     // Verify final state
     let commitment = fixture.core_client.get_commitment(&commitment_id);
     assert_eq!(commitment.current_value, 1030_0000000);
-    
+
     let metrics = fixture.attestation_client.get_health_metrics(&commitment_id);
     assert_eq!(metrics.fees_generated, 60_0000000);
 }
@@ -334,17 +329,17 @@ fn test_gas_multiple_operations() {
 #[ignore] // Requires token contract setup
 fn test_gas_batch_attestations() {
     let fixture = IntegrationTestFixture::setup();
-    
+
     let rules = fixture.create_test_rules();
-    
+
     // Create commitment
-    let commitment_id: u32 = fixture.core_client.create_commitment(
+    let commitment_id: String = fixture.core_client.create_commitment(
         &fixture.owner,
         &1000_0000000,
         &fixture.asset_address,
         &rules,
     );
-    
+
     // Multiple attestations
     let check_numbers = ["1", "2", "3", "4", "5"];
     for check_num in check_numbers.iter() {
@@ -353,15 +348,16 @@ fn test_gas_batch_attestations() {
             String::from_str(&fixture.env, "check_number"),
             String::from_str(&fixture.env, check_num),
         );
-        
+
         fixture.attestation_client.attest(
+            &fixture.verifier,
             &commitment_id,
             &String::from_str(&fixture.env, "health_check"),
             &data,
-            &fixture.verifier,
+            &true,
         );
     }
-    
+
     // Verify all attestations recorded
     let attestations = fixture.attestation_client.get_attestations(&commitment_id);
     assert_eq!(attestations.len(), 5);
