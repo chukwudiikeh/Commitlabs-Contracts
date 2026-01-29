@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, log, token, symbol_short, Address, Env, IntoVal, String,
     Symbol, Vec,
 };
-use shared_utils::{SafeMath, TimeUtils, Validation, RateLimiter};
+use shared_utils::{SafeMath, TimeUtils, Validation, RateLimiter, emit_error_event};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -23,6 +23,37 @@ pub enum CommitmentError {
     ReentrancyDetected = 11,
     NotActive = 12,
     InvalidStatus = 13,
+    NotInitialized = 14,
+    NotExpired = 15,
+}
+
+impl CommitmentError {
+    /// Human-readable message for debugging and error events.
+    pub fn message(&self) -> &'static str {
+        match self {
+            CommitmentError::InvalidDuration => "Invalid duration: must be greater than zero",
+            CommitmentError::InvalidMaxLossPercent => "Invalid max loss: must be 0-100",
+            CommitmentError::InvalidCommitmentType => "Invalid commitment type",
+            CommitmentError::InvalidAmount => "Invalid amount: must be greater than zero",
+            CommitmentError::InsufficientBalance => "Insufficient balance",
+            CommitmentError::TransferFailed => "Token transfer failed",
+            CommitmentError::MintingFailed => "NFT minting failed",
+            CommitmentError::CommitmentNotFound => "Commitment not found",
+            CommitmentError::Unauthorized => "Unauthorized: caller not allowed",
+            CommitmentError::AlreadyInitialized => "Contract already initialized",
+            CommitmentError::ReentrancyDetected => "Reentrancy detected",
+            CommitmentError::NotActive => "Commitment is not active",
+            CommitmentError::InvalidStatus => "Invalid commitment status for this operation",
+            CommitmentError::NotInitialized => "Contract not initialized",
+            CommitmentError::NotExpired => "Commitment has not expired yet",
+        }
+    }
+}
+
+/// Emit error event and panic with standardized message (for indexers and UX).
+fn fail(e: &Env, err: CommitmentError, context: &str) -> ! {
+    emit_error_event(e, err as u32, context);
+    panic!("{}", err.message());
 }
 
 #[contracttype]
@@ -82,7 +113,7 @@ fn transfer_assets(e: &Env, from: &Address, to: &Address, asset_address: &Addres
     let balance = token_client.balance(from);
     if balance < amount {
         log!(e, "Insufficient balance: {} < {}", balance, amount);
-        panic!("Insufficient balance");
+        fail(e, CommitmentError::InsufficientBalance, "transfer_assets");
     }
 
     // Transfer tokens (fails transaction if unsuccessful)
@@ -142,7 +173,7 @@ fn require_no_reentrancy(e: &Env) {
         .unwrap_or(false);
     
     if guard {
-        panic!("Reentrancy detected");
+        fail(e, CommitmentError::ReentrancyDetected, "require_no_reentrancy");
     }
 }
 
@@ -157,9 +188,9 @@ fn require_admin(e: &Env, caller: &Address) {
         .storage()
         .instance()
         .get::<_, Address>(&DataKey::Admin)
-        .unwrap_or_else(|| panic!("Contract not initialized"));
+        .unwrap_or_else(|| fail(e, CommitmentError::NotInitialized, "require_admin"));
     if *caller != admin {
-        panic!("Unauthorized: only admin can perform this action");
+        fail(e, CommitmentError::Unauthorized, "require_admin");
     }
 }
 
@@ -219,7 +250,7 @@ impl CommitmentCoreContract {
     pub fn initialize(e: Env, admin: Address, nft_contract: Address) {
         // Check if already initialized
         if e.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            fail(&e, CommitmentError::AlreadyInitialized, "initialize");
         }
 
         // Store admin and NFT contract address
@@ -304,7 +335,7 @@ impl CommitmentCoreContract {
             let nft = e.storage().instance().get::<_, Address>(&DataKey::NftContract)
                 .unwrap_or_else(|| {
                     set_reentrancy_guard(&e, false);
-                    panic!("Contract not initialized")
+                    fail(&e, CommitmentError::NotInitialized, "create_commitment")
                 });
             (total, tvl, nft)
         };
@@ -315,7 +346,7 @@ impl CommitmentCoreContract {
         // CHECKS: Validate commitment doesn't already exist
         if has_commitment(&e, &commitment_id) {
             set_reentrancy_guard(&e, false);
-            panic!("Commitment already exists");
+            fail(&e, CommitmentError::InvalidStatus, "create_commitment");
         }
 
         // EFFECTS: Update state before external calls
@@ -397,7 +428,7 @@ impl CommitmentCoreContract {
     /// Get commitment details
     pub fn get_commitment(e: Env, commitment_id: String) -> Commitment {
         read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"))
+            .unwrap_or_else(|| fail(&e, CommitmentError::CommitmentNotFound, "get_commitment"))
     }
 
     /// Get all commitments for an owner
@@ -429,7 +460,7 @@ impl CommitmentCoreContract {
         e.storage()
             .instance()
             .get::<_, Address>(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("Contract not initialized"))
+            .unwrap_or_else(|| fail(&e, CommitmentError::NotInitialized, "get_admin"))
     }
 
     /// Get NFT contract address
@@ -437,7 +468,7 @@ impl CommitmentCoreContract {
         e.storage()
             .instance()
             .get::<_, Address>(&DataKey::NftContract)
-            .unwrap_or_else(|| panic!("Contract not initialized"))
+            .unwrap_or_else(|| fail(&e, CommitmentError::NotInitialized, "get_nft_contract"))
     }
 
     /// Update commitment value (called by allocation logic or oracle-fed keeper).
@@ -451,11 +482,11 @@ impl CommitmentCoreContract {
         Validation::require_non_negative(new_value);
 
         let mut commitment = read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"));
+            .unwrap_or_else(|| fail(&e, CommitmentError::CommitmentNotFound, "update_value"));
 
         let active_status = String::from_str(&e, "active");
         if commitment.status != active_status {
-            panic!("Commitment is not active");
+            fail(&e, CommitmentError::NotActive, "update_value");
         }
 
         let old_value = commitment.current_value;
@@ -498,7 +529,7 @@ impl CommitmentCoreContract {
     /// - SP-4: State consistency (read-only)
     pub fn check_violations(e: Env, commitment_id: String) -> bool {
         let commitment = read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"));
+            .unwrap_or_else(|| fail(&e, CommitmentError::CommitmentNotFound, "check_violations"));
 
         // Skip check if already settled or violated
         let active_status = String::from_str(&e, "active");
@@ -546,7 +577,7 @@ impl CommitmentCoreContract {
         commitment_id: String,
     ) -> (bool, bool, bool, i128, u64) {
         let commitment = read_commitment(&e, &commitment_id)
-            .unwrap_or_else(|| panic!("Commitment not found"));
+            .unwrap_or_else(|| fail(&e, CommitmentError::CommitmentNotFound, "get_violation_details"));
 
         let current_time = e.ledger().timestamp();
 
@@ -590,21 +621,21 @@ impl CommitmentCoreContract {
         let mut commitment = read_commitment(&e, &commitment_id)
             .unwrap_or_else(|| {
                 set_reentrancy_guard(&e, false);
-                panic!("Commitment not found")
+                fail(&e, CommitmentError::CommitmentNotFound, "settle")
             });
 
         // Verify commitment is expired
         let current_time = e.ledger().timestamp();
         if current_time < commitment.expires_at {
             set_reentrancy_guard(&e, false);
-            panic!("Commitment has not expired yet");
+            fail(&e, CommitmentError::NotExpired, "settle");
         }
 
         // Verify commitment is active
         let active_status = String::from_str(&e, "active");
         if commitment.status != active_status {
             set_reentrancy_guard(&e, false);
-            panic!("Commitment is not active");
+            fail(&e, CommitmentError::NotActive, "settle");
         }
 
         // EFFECTS: Update state before external calls
@@ -636,7 +667,7 @@ impl CommitmentCoreContract {
             .get::<_, Address>(&DataKey::NftContract)
             .unwrap_or_else(|| {
                 set_reentrancy_guard(&e, false);
-                panic!("NFT contract not initialized")
+                fail(&e, CommitmentError::NotInitialized, "settle")
             });
         
         let mut args = Vec::new(&e);
@@ -662,21 +693,21 @@ impl CommitmentCoreContract {
         let mut commitment = read_commitment(&e, &commitment_id)
             .unwrap_or_else(|| {
                 set_reentrancy_guard(&e, false);
-                panic!("Commitment not found")
+                fail(&e, CommitmentError::CommitmentNotFound, "early_exit")
             });
 
         // Verify caller is owner
         caller.require_auth();
         if commitment.owner != caller {
             set_reentrancy_guard(&e, false);
-            panic!("Unauthorized: caller is not the owner");
+            fail(&e, CommitmentError::Unauthorized, "early_exit");
         }
 
         // Verify commitment is active
         let active_status = String::from_str(&e, "active");
         if commitment.status != active_status {
             set_reentrancy_guard(&e, false);
-            panic!("Commitment is not active");
+            fail(&e, CommitmentError::NotActive, "early_exit");
         }
 
         // EFFECTS: Calculate penalty using shared utilities
@@ -716,7 +747,7 @@ impl CommitmentCoreContract {
             .get::<_, Address>(&DataKey::NftContract)
             .unwrap_or_else(|| {
                 set_reentrancy_guard(&e, false);
-                panic!("NFT contract not initialized")
+                fail(&e, CommitmentError::NotInitialized, "early_exit")
             });
         
         // Call settle on NFT to mark it as inactive
@@ -750,26 +781,26 @@ impl CommitmentCoreContract {
         // CHECKS: Validate inputs and commitment
         if amount <= 0 {
             set_reentrancy_guard(&e, false);
-            panic!("Invalid amount");
+            fail(&e, CommitmentError::InvalidAmount, "allocate");
         }
 
         let commitment = read_commitment(&e, &commitment_id)
             .unwrap_or_else(|| {
                 set_reentrancy_guard(&e, false);
-                panic!("Commitment not found")
+                fail(&e, CommitmentError::CommitmentNotFound, "allocate")
             });
 
         // Verify commitment is active
         let active_status = String::from_str(&e, "active");
         if commitment.status != active_status {
             set_reentrancy_guard(&e, false);
-            panic!("Commitment is not active");
+            fail(&e, CommitmentError::NotActive, "allocate");
         }
 
         // Verify sufficient balance
         if commitment.current_value < amount {
             set_reentrancy_guard(&e, false);
-            panic!("Insufficient commitment value");
+            fail(&e, CommitmentError::InsufficientBalance, "allocate");
         }
 
         // EFFECTS: Update commitment value before external call
