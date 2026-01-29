@@ -13,6 +13,7 @@ soroban-sdk = { version = "21.0.0", features = ["testutils"] }
 commitment_nft = { path = "../../contracts/commitment_nft" }
 commitment_core = { path = "../../contracts/commitment_core" }
 attestation_engine = { path = "../../contracts/attestation_engine" }
+price_oracle = { path = "../../contracts/price_oracle" }
 
 [lib]
 crate-type = ["rlib"]

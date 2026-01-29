@@ -631,13 +631,35 @@ fn test_update_value_event() {
     let e = Env::default();
     let contract_id = e.register_contract(None, CommitmentCoreContract);
     let client = CommitmentCoreContractClient::new(&e, &contract_id);
-
+    let admin = Address::generate(&e);
+    let nft_contract = Address::generate(&e);
+    let owner = Address::generate(&e);
     let commitment_id = String::from_str(&e, "test_id");
-    client.update_value(&commitment_id, &1100);
+
+    e.as_contract(&contract_id, || {
+        CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
+        let commitment = create_test_commitment(
+            &e,
+            "test_id",
+            &owner,
+            1000,
+            1000,
+            10,
+            30,
+            e.ledger().timestamp(),
+        );
+        set_commitment(&e, &commitment);
+        e.storage().instance().set(&DataKey::TotalValueLocked, &1000i128);
+        // Call update_value in same context so it sees stored commitment
+        CommitmentCoreContract::update_value(e.clone(), commitment.commitment_id.clone(), 1100);
+    });
+
+    let commitment = client.get_commitment(&commitment_id);
+    assert_eq!(commitment.current_value, 1100);
+    assert_eq!(client.get_total_value_locked(), 1100);
 
     let events = e.events().all();
     let last_event = events.last().unwrap();
-
     assert_eq!(last_event.0, contract_id);
     assert_eq!(
         last_event.1,
@@ -657,8 +679,10 @@ fn test_update_value_rate_limit_enforced() {
 
     let admin = Address::generate(&e);
     let nft_contract = Address::generate(&e);
+    let owner = Address::generate(&e);
+    let commitment_id = String::from_str(&e, "rl_test");
 
-    // Initialize and configure rate limit: 1 update per 60 seconds
+    // Initialize, configure rate limit (1 update per 60 seconds), store commitment, do first update in-context
     e.as_contract(&contract_id, || {
         CommitmentCoreContract::initialize(e.clone(), admin.clone(), nft_contract.clone());
         CommitmentCoreContract::set_rate_limit(
@@ -668,11 +692,23 @@ fn test_update_value_rate_limit_enforced() {
             60,
             1,
         );
+        let commitment = create_test_commitment(
+            &e,
+            "rl_test",
+            &owner,
+            1000,
+            1000,
+            10,
+            30,
+            e.ledger().timestamp(),
+        );
+        set_commitment(&e, &commitment);
+        e.storage().instance().set(&DataKey::TotalValueLocked, &1000i128);
+        // First update_value inside contract context (consumes the one allowed call)
+        CommitmentCoreContract::update_value(e.clone(), commitment.commitment_id.clone(), 100);
     });
 
-    let commitment_id = String::from_str(&e, "rl_test");
-    client.update_value(&commitment_id, &100);
-    // Second call within same window should panic
+    // Second call via client should hit rate limit
     client.update_value(&commitment_id, &200);
 }
 

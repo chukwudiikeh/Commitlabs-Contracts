@@ -312,26 +312,6 @@ impl CommitmentCoreContract {
         // Generate unique commitment ID using counter
         let commitment_id = Self::generate_commitment_id(&e, current_total);
 
-        // Get NFT contract address
-        let nft_contract = e
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::NftContract)
-            .unwrap_or_else(|| {
-                set_reentrancy_guard(&e, false);
-                panic!("Contract not initialized")
-            });
-
-        // Get NFT contract address
-        let nft_contract = e
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::NftContract)
-            .unwrap_or_else(|| {
-                set_reentrancy_guard(&e, false);
-                panic!("Contract not initialized")
-            });
-
         // CHECKS: Validate commitment doesn't already exist
         if has_commitment(&e, &commitment_id) {
             set_reentrancy_guard(&e, false);
@@ -460,16 +440,39 @@ impl CommitmentCoreContract {
             .unwrap_or_else(|| panic!("Contract not initialized"))
     }
 
-    /// Update commitment value (called by allocation logic)
+    /// Update commitment value (called by allocation logic or oracle-fed keeper).
+    /// Persists new_value to commitment.current_value and updates TotalValueLocked.
     pub fn update_value(e: Env, commitment_id: String, new_value: i128) {
         // Global per-function rate limit (per contract instance)
         let fn_symbol = symbol_short!("upd_val");
         let contract_address = e.current_contract_address();
         RateLimiter::check(&e, &contract_address, &fn_symbol);
 
-        // NOTE: Authorization and value update logic can be extended here.
+        Validation::require_non_negative(new_value);
 
-        // Emit value update event
+        let mut commitment = read_commitment(&e, &commitment_id)
+            .unwrap_or_else(|| panic!("Commitment not found"));
+
+        let active_status = String::from_str(&e, "active");
+        if commitment.status != active_status {
+            panic!("Commitment is not active");
+        }
+
+        let old_value = commitment.current_value;
+        commitment.current_value = new_value;
+        set_commitment(&e, &commitment);
+
+        // Adjust TotalValueLocked: TVL -= old_value, TVL += new_value
+        let current_tvl = e
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::TotalValueLocked)
+            .unwrap_or(0);
+        let new_tvl = current_tvl - old_value + new_value;
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalValueLocked, &new_tvl);
+
         e.events().publish(
             (symbol_short!("ValUpd"), commitment_id),
             (new_value, e.ledger().timestamp()),

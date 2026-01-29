@@ -96,6 +96,7 @@ jobs:
 
       - name: Run performance benchmarks
         run: |
+          mkdir -p benchmarks/results
           echo "Running performance benchmarks..."
           cargo test --workspace --features benchmark --release -- --nocapture 2>&1 | tee benchmarks/results/ci_benchmark_$(date +%Y%m%d_%H%M%S).log || echo "Note: Some benchmarks may have failed, but continuing..."
           echo "✓ Benchmarks completed"

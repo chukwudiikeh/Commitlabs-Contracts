@@ -1,11 +1,12 @@
 // Integration tests for cross-contract interactions
-// This file contains tests that verify interactions between Commitment NFT, Commitment Core, and Attestation Engine contracts
+// This file contains tests that verify interactions between Commitment NFT, Commitment Core, Attestation Engine, and Price Oracle contracts
 
 #![cfg(test)]
 
 use commitment_core::{CommitmentCoreContract, CommitmentCoreContractClient, CommitmentRules};
 use commitment_nft::{CommitmentNFTContract, CommitmentNFTContractClient};
 use attestation_engine::{AttestationEngineContract, AttestationEngineContractClient};
+use price_oracle::{PriceOracleContract, PriceOracleContractClient};
 use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String, Map};
 
 pub struct IntegrationTestFixture {
@@ -361,4 +362,77 @@ fn test_gas_batch_attestations() {
     // Verify all attestations recorded
     let attestations = fixture.attestation_client.get_attestations(&commitment_id);
     assert_eq!(attestations.len(), 5);
+}
+
+// ============================================
+// Oracle Integration Tests
+// ============================================
+
+#[test]
+fn test_oracle_integration_price_feed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle_feeder = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let oracle_id = env.register_contract(None, PriceOracleContract);
+    let oracle_client = PriceOracleContractClient::new(&env, &oracle_id);
+
+    oracle_client.initialize(&admin);
+    oracle_client.add_oracle(&admin, &oracle_feeder);
+
+    oracle_client.set_price(&oracle_feeder, &asset, &1_500_000000, &8);
+    let data = oracle_client.get_price(&asset);
+    assert_eq!(data.price, 1_500_000000);
+    assert_eq!(data.decimals, 8);
+}
+
+#[test]
+fn test_oracle_integration_validation_and_staleness() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle_feeder = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let oracle_id = env.register_contract(None, PriceOracleContract);
+    let oracle_client = PriceOracleContractClient::new(&env, &oracle_id);
+
+    oracle_client.initialize(&admin);
+    oracle_client.add_oracle(&admin, &oracle_feeder);
+    oracle_client.set_max_staleness(&admin, &300);
+
+    oracle_client.set_price(&oracle_feeder, &asset, &2_000_000000, &8);
+    let data = oracle_client.get_price_valid(&asset, &None);
+    assert_eq!(data.price, 2_000_000000);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp += 400;
+    });
+    let _ = oracle_client.get_price_valid(&asset, &Some(500));
+}
+
+#[test]
+fn test_oracle_whitelist_only_can_set_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle_feeder = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let oracle_id = env.register_contract(None, PriceOracleContract);
+    let oracle_client = PriceOracleContractClient::new(&env, &oracle_id);
+
+    oracle_client.initialize(&admin);
+    oracle_client.add_oracle(&admin, &oracle_feeder);
+
+    assert!(oracle_client.is_oracle_whitelisted(&oracle_feeder));
+    oracle_client.set_price(&oracle_feeder, &asset, &100, &6);
+
+    oracle_client.remove_oracle(&admin, &oracle_feeder);
+    assert!(!oracle_client.is_oracle_whitelisted(&oracle_feeder));
 }
