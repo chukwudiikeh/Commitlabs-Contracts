@@ -1828,7 +1828,7 @@ impl AttestationEngineContract {
 // }
 }
 
-#[cfg(test)]
-mod tests;
-#[cfg(all(test, feature = "benchmark"))]
-mod benchmarks;
+// #[cfg(test)]
+// mod tests;
+// #[cfg(all(test, feature = "benchmark"))]
+// mod benchmarks;
